@@ -21,7 +21,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <string.h>
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,17 +47,16 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-uint8_t gyr_data = {0x11, 0x44};
+uint8_t gyr_data[2] = {0x11, 0x14};
 
-uint8_t acc_data = {0x10, 0x4C};
+uint8_t acc_data[2] = {0x10, 0x1C};
 
-uint8_t int1_ctrl = {0x0D, 0x01};
+uint8_t int1_ctrl[2] = {0x0D, 0x03};
 
-uint8_t int2_ctrl = {0x0E, 0x01};
+uint8_t ctrl3_data[2] = {0x12, 0x44};
 
-uint8_t crtl3_data = {0x12, 0x40};
+uint8_t ctrl4_data[2] = {0x13, 0x08};
 
-uint8_t ctrl4_data = {0x13, 0x08};
 
 uint8_t READ_REGSTER = 0x22;
 
@@ -66,19 +66,9 @@ uint8_t read[12];
 
 volatile uint8_t data_ready = 0;
 
-uint16_t *XYZ_Data[6];
+float XYZ_Data[6];
 
-uint16_t GX = 0;
-
-uint16_t GY = 0;
-
-uint16_t GZ = 0;
-
-uint16_t AX = 0;
-
-uint16_t AY = 0;
-
-uint16_t AZ = 0;
+char buf[150];
 
 /* USER CODE END PV */
 
@@ -88,6 +78,9 @@ static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
+
+void Process_Data(uint8_t data[12], float *returnData);
+
 
 /* USER CODE END PFP */
 
@@ -128,49 +121,46 @@ int main(void)
   MX_I2C1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  HAL_I2C_Master_Transmit(&hi2c1, 0x6A << 1, &int1_ctrl, 2, 100);
-  HAL_I2C_Master_Transmit(&hi2c1, 0x6A << 1, &int2_ctrl, 2, 100);//write to set notification bit
-  HAL_I2C_Master_Transmit(&hi2c1, 0x6A << 1, &ctrl4_data, 2, 100);
-  HAL_I2C_Master_Transmit(&hi2c1, 0x6A << 1, &acc_data, 2, 100);//write to set high performance mode for both gyroscope and acc
-  HAL_I2C_Master_Transmit(&hi2c1, 0x6A << 1, &gyr_data, 2, 100);
-  HAL_I2C_Master_Transmit(&hi2c1, 0x6A << 1, &crtl3_data,2, 100); // set the bdu bit to active in the ctrl3c register
+  HAL_Delay(20);
+  HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1, &READ_REGSTER, 1, 100);
+  HAL_I2C_Master_Receive(&hi2c1, 0x6B << 1, read, 12, 100);
+  HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1, ctrl3_data, 2, 100);
+  HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1, ctrl4_data, 2, 100);
+  HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1, int1_ctrl, 2, 100);
+  HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1, acc_data, 2, 100);//write to set high performance mode for both gyroscope and acc
+  HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1, gyr_data, 2, 100);
+
+   // set the bdu bit to active in the ctrl3c register
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-
 	  if(data_ready){
+		  HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
 		  data_ready = 0;
-		  HAL_I2C_Master_Transmit(&hi2c1, 0x6A << 1 ,&READ_REGSTER, 1, 100);// send register that we are going to start reading from
-		  HAL_I2C_Master_Receive(&hi2c1, 0x6A << 1, read, 6, 100);// read the incoming data
+		  HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1 ,&READ_REGSTER, 1, 100);// send register that we are going to start reading from
+		  HAL_I2C_Master_Receive(&hi2c1, 0x6B << 1, read, 12, 100);// read the incoming data
+
 		  Process_Data(read, XYZ_Data);
-
-		  XYZ_Data[0] = XYZ_Data[0] * 0.0175;
-		  XYZ_Data[1] = XYZ_Data[1] * 0.0175;
-		  XYZ_Data[2] = XYZ_Data[2] * 0.0175;
-		  XYZ_Data[3] = XYZ_Data[3] * 0.000244;
-		  XYZ_Data[4] = XYZ_Data[4] * 0.000244;
-		  XYZ_Data[5] = XYZ_Data[5] * 0.000244;
-
-		  HAL_UART_Transmit(&huart2, XYZ_Data, 12, 100);
-
+		  sprintf(buf, "GX:%.2f GY:%.2f GZ:%.2f AX:%.2f AY:%.2f AZ:%.2f\r\n",
+				  XYZ_Data[0], XYZ_Data[1], XYZ_Data[2],
+				  XYZ_Data[3], XYZ_Data[4], XYZ_Data[5]);
+		  HAL_UART_Transmit(&huart2, (uint8_t*)buf, strlen(buf), 100);
 	  }
+
 /*
-	  if(status & 0x01){
-		  read data logic
-	  }
-
-
-	  if(status & 0x02){
-		 read data logic
-
-	  }
-
+	    HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1, &READ_REGSTER, 1, 100);
+	    HAL_I2C_Master_Receive(&hi2c1, 0x6B << 1, read, 12, 100);
+	    Process_Data(read, XYZ_Data);
+	    sprintf(buf, "GX:%.2f GY:%.2f GZ:%.2f AX:%.2f AY:%.2f AZ:%.2f\r\n",
+	        XYZ_Data[0], XYZ_Data[1], XYZ_Data[2],
+	        XYZ_Data[3], XYZ_Data[4], XYZ_Data[5]);
+	    HAL_UART_Transmit(&huart2, (uint8_t*)buf, strlen(buf), 100);
+	    HAL_Delay(100);
 */
-	  HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-	  HAL_Delay(100);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -333,11 +323,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PA7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_7;
+  /*Configure GPIO pin : PB5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
@@ -351,21 +341,18 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_PIN){
-	if(GPIO_PIN = GPIO_PIN_7){
-		data_ready = 1;
-	}
-
+	data_ready = 1;
 }
 
-void Process_Data(uint8_t data[12], int16_t *returnData){
+void Process_Data(uint8_t data[12], float *returnData){
 
-	returnData[0] = (uint16_t)(data[1] << 8 | data[0]); // X val of gyroscope
-	returnData[1] = (uint16_t)(data[3] << 8 | data[2]); // Y val of gyroscope
-	returnData[2] = (uint16_t)(data[5] << 8 | data[4]); // Z val of gyroscope
+	returnData[0] = (int16_t)(data[1] << 8 | data[0]) * 0.0175; // X val of gyroscope
+	returnData[1] = (int16_t)(data[3] << 8 | data[2]) * 0.0175; // Y val of gyroscope
+	returnData[2] = (int16_t)(data[5] << 8 | data[4]) * 0.0175; // Z val of gyroscope
 
-	returnData[3] = (uint16_t)(data[7] << 8 | data[6]); // X val of acc
-	returnData[4] = (uint16_t)(data[9] << 8 | data[8]); // Y val of acc
-	returnData[5] = (uint16_t)(data[11] << 8 | data[10]); // Z val of acc
+	returnData[3] = (int16_t)(data[7] << 8 | data[6]) * 0.000244; // X val of acc
+	returnData[4] = (int16_t)(data[9] << 8 | data[8]) * 0.000244; // Y val of acc
+	returnData[5] = (int16_t)(data[11] << 8 | data[10]) * 0.000244; // Z val of acc
 }
 
 /* USER CODE END 4 */
