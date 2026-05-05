@@ -344,7 +344,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_PIN){
 	data_ready = 1;
 }
 
-void Process_Data(uint8_t data[12], float *returnData){
+void Process_Data(uint8_t *data, float *returnData){
 
 	returnData[0] = (int16_t)(data[1] << 8 | data[0]) * 0.0175; // X val of gyroscope
 	returnData[1] = (int16_t)(data[3] << 8 | data[2]) * 0.0175; // Y val of gyroscope
