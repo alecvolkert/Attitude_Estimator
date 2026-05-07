@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -32,6 +33,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+#define ALPHA 0.005
 
 /* USER CODE END PD */
 
@@ -64,11 +67,33 @@ uint8_t status = 0;
 
 uint8_t read[12];
 
+uint32_t last_tick = 0;
+
+float phi = 0.0;
+
+float theta = 0.0;
+
+float gyro_phi = 0.0;
+
+float gyro_theta = 0.0;
+
 volatile uint8_t data_ready = 0;
 
 float XYZ_Data[6];
 
 char buf[150];
+
+float matrix[3][3];
+
+float phidot;
+
+float thetadot;
+
+float psidot;
+
+double roll_deg = 0;
+
+double pitch_deg = 0;
 
 /* USER CODE END PV */
 
@@ -79,7 +104,67 @@ static void MX_I2C1_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
-void Process_Data(uint8_t data[12], float *returnData);
+void Process_Data(uint8_t *data, float *returnData){
+
+	returnData[0] = (int16_t)(data[1] << 8 | data[0]) * 0.0175 * (M_PI / 180.0); // X val of gyroscope
+	returnData[1] = (int16_t)(data[3] << 8 | data[2]) * 0.0175 * (M_PI / 180.0); // Y val of gyroscope
+	returnData[2] = (int16_t)(data[5] << 8 | data[4]) * 0.0175 * (M_PI / 180.0); // Z val of gyroscope
+
+	returnData[3] = (int16_t)(data[7] << 8 | data[6]) * 0.000244; // X val of acc
+	returnData[4] = (int16_t)(data[9] << 8 | data[8]) * 0.000244; // Y val of acc
+	returnData[5] = (int16_t)(data[11] << 8 | data[10]) * 0.000244; // Z val of acc
+}
+
+void Update_Matrix(void){
+    matrix[0][0] = 1;
+    matrix[0][1] = sinf(phi) * tanf(theta);
+    matrix[0][2] = cosf(phi) * tanf(theta);
+
+    matrix[1][0] = 0;
+    matrix[1][1] = cosf(phi);
+    matrix[1][2] = -sinf(phi);
+
+    matrix[2][0] = 0;
+    matrix[2][1] = sinf(phi) / cosf(theta);
+    matrix[2][2] = cosf(phi) / cosf(theta);
+}
+
+
+void Euler_Angles(float p, float q, float r){
+
+	Update_Matrix();
+
+	phidot = p*matrix[0][0] + q*matrix[0][1] + r*matrix[0][2];
+	thetadot = p*matrix[1][0] + q*matrix[1][1] + r*matrix[1][2];
+	psidot = p* matrix[2][0] + q*matrix[2][1] + r*matrix[2][2];
+
+}
+
+void Update_Integral_Gyro(float x, float y, float z){
+
+	Euler_Angles(x, y, z);
+
+	uint32_t now = HAL_GetTick();
+	float dt = ((float)now - (float)last_tick) / 1000.0;
+	last_tick = now;
+
+	gyro_phi = gyro_phi + (phidot * dt);
+	gyro_theta = gyro_theta + (thetadot * dt);
+}
+
+
+void Complementary_Filter(float *data){
+
+	float acc_phi_est = atan2f((float)data[4], sqrtf((float)data[3]*(float)data[3]+(float)data[5]*(float)data[5])); //get the estimated acc value data[4] acc y data[5] is acc z
+	float acc_theta_est = asinf(-data[3]);
+	Update_Integral_Gyro(data[0], data[1], data[2]);
+
+	theta = (acc_theta_est) * ALPHA + ((1-ALPHA) * gyro_theta);
+	phi = (acc_phi_est * ALPHA + ((1-ALPHA) * gyro_phi));
+
+	roll_deg = phi * 180/M_PI;
+	pitch_deg = theta * 180/M_PI;
+}
 
 
 /* USER CODE END PFP */
@@ -130,7 +215,15 @@ int main(void)
   HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1, acc_data, 2, 100);//write to set high performance mode for both gyroscope and acc
   HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1, gyr_data, 2, 100);
 
-   // set the bdu bit to active in the ctrl3c register
+  HAL_I2C_Master_Transmit(&hi2c1, 0x6B << 1 ,&READ_REGSTER, 1, 100);// send register that we are going to start reading from
+  HAL_I2C_Master_Receive(&hi2c1, 0x6B << 1, read, 12, 100);// read the incoming data
+  Process_Data(read, XYZ_Data);
+
+  phi = atan2f(XYZ_Data[4], XYZ_Data[5]); //set starting roll value
+  theta = asinf(-XYZ_Data[3]);//set starting pitch value
+
+  gyro_phi = phi;
+  gyro_theta = theta;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -144,10 +237,9 @@ int main(void)
 		  HAL_I2C_Master_Receive(&hi2c1, 0x6B << 1, read, 12, 100);// read the incoming data
 
 		  Process_Data(read, XYZ_Data);
-		  sprintf(buf, "GX:%.2f GY:%.2f GZ:%.2f AX:%.2f AY:%.2f AZ:%.2f\r\n",
-				  XYZ_Data[0], XYZ_Data[1], XYZ_Data[2],
-				  XYZ_Data[3], XYZ_Data[4], XYZ_Data[5]);
+		  sprintf(buf, "%.2f,%.2f\n", pitch_deg, roll_deg);
 		  HAL_UART_Transmit(&huart2, (uint8_t*)buf, strlen(buf), 100);
+		  Complementary_Filter(XYZ_Data);
 	  }
 
 /*
@@ -342,17 +434,6 @@ static void MX_GPIO_Init(void)
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_PIN){
 	data_ready = 1;
-}
-
-void Process_Data(uint8_t *data, float *returnData){
-
-	returnData[0] = (int16_t)(data[1] << 8 | data[0]) * 0.0175; // X val of gyroscope
-	returnData[1] = (int16_t)(data[3] << 8 | data[2]) * 0.0175; // Y val of gyroscope
-	returnData[2] = (int16_t)(data[5] << 8 | data[4]) * 0.0175; // Z val of gyroscope
-
-	returnData[3] = (int16_t)(data[7] << 8 | data[6]) * 0.000244; // X val of acc
-	returnData[4] = (int16_t)(data[9] << 8 | data[8]) * 0.000244; // Y val of acc
-	returnData[5] = (int16_t)(data[11] << 8 | data[10]) * 0.000244; // Z val of acc
 }
 
 /* USER CODE END 4 */
